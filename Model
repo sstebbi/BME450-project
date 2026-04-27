@@ -1,0 +1,119 @@
+#BME 450 Final Project
+
+#Input city, weather, and gender of customer
+#NN will predict the product name that is most likely to be purchased
+
+import torch
+import torch.nn as nn
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+
+#upload dataset to colab
+from google.colab import files
+upload = files.upload()
+
+#import dataset
+data = pd.read_csv("coffee_shop_sales.csv")
+
+#display the column labels for the dataset
+print(data.columns) #display the index for the dataset columns
+
+#creates groups in the dataset based on the desired input conditions and desired output
+condense = data.groupby(['city', 'weather_condition', 'customer_gender', 'product_name'], as_index=False)['total_amount'].sum()
+
+#function to determine the top purchased item category based on the input conditions
+def find_top_purchased(x):
+  return x.loc[x['total_amount'].idxmax()]
+
+#finds top purchased items using defined function and inputs of city, weather, and gender
+top_purchased = condense.groupby(['city', 'weather_condition', 'customer_gender']).apply(find_top_purchased).reset_index(drop=True)
+
+#input definition and target definition
+conditions = top_purchased[['city', 'customer_gender', 'weather_condition']]
+target = top_purchased['product_name']
+
+#convert column values into integers for easier processing
+feature_encoders = {}
+for col in ['city', 'weather_condition', 'customer_gender']:
+  le = LabelEncoder()
+  conditions[col] = le.fit_transform(conditions[col])
+  feature_encoders[col] = le
+
+target_encoder = LabelEncoder()
+target =target_encoder.fit_transform(target)
+num_classes = len(target_encoder.classes_)
+
+#create tensors for the inputs and outputs
+conditions_tensor = torch.tensor(conditions.values, dtype=torch.float32) #shape is determined by the number of samples and features
+target_tensor = torch.tensor(target, dtype=torch.long)
+
+#definition of the neural network
+class PurchaseClassifier(nn.Module):
+  def __init__(self, input_dim, num_classes):
+    super(PurchaseClassifier, self).__init__()
+    self.model = nn.Sequential(
+        nn.Linear(input_dim, 64),
+        nn.ReLU(),
+        nn.Linear(64, 32),
+        nn.ReLU(),
+        nn.Linear(32, num_classes) #output logits for each product
+    )
+
+  def forward(self, x):
+    return self.model(x)
+
+input_dim = conditions_tensor.shape[1]
+model = PurchaseClassifier(input_dim, num_classes)
+
+#funtions to calculate loss and optimize the weights of the NN to minimize loss
+find_loss = nn.CrossEntropyLoss()
+optimize = torch.optim.Adam(model.parameters(), lr=0.01)
+
+#training the model
+epochs = 100
+
+#loop through epochs for training while calculating the loss
+for epoch in range(epochs):
+  model.train()
+  optimize.zero_grad()
+
+  logits = model(conditions_tensor)
+  loss = find_loss(logits, target_tensor)
+
+  #backwards propogation
+  loss.backward()
+  optimize.step()
+
+  #prints epoch and loss every 10 epochs
+  if (epoch + 1) % 10 == 0:
+    print(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+
+#function to determine predicted purchased item based on user input of conditions
+def predict_top_purchased(model, city_input, weather_input, gender_input, feature_encoders, target_encoder):
+
+  #Encoded user input
+  city_encoded = feature_encoders['city'].transform([city_input])[0]
+  weather_encoded = feature_encoders['weather_condition'].transform([weather_input])[0]
+  gender_encoded = feature_encoders['customer_gender'].transform([gender_input])[0]
+
+  #Input tensor
+  input_tensor = torch.tensor([[city_encoded, weather_encoded, gender_encoded]], dtype=torch.float32)
+
+  model.eval()
+  with torch.no_grad():
+    logits = model(input_tensor)
+    predicted_class = torch.argmax(logits, dim=1).item()
+    predicted_purchase = target_encoder.inverse_transform([predicted_class])[0]
+
+  return predicted_purchase
+
+#User inputs for conditions
+input_city = input("Enter city name: ")
+input_weather = input("Enter weather condition in city: ")
+input_gender = input("Enter gender of the customer: ")
+
+#Run function with submitted inputs
+purchased_item = predict_top_purchased(model, input_city, input_weather, input_gender, feature_encoders, target_encoder)
+
+#print the predicted top item purchased based on these conditions
+print(f"The customer is most likely to purchase: {purchased_item}")
